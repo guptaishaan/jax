@@ -4796,6 +4796,48 @@ class AsyncCopyTest(TestCase, jtu.CudaArchSpecificTest):
     self._test_cp_async(shape, dtype, swizzle=swizzle, tiling=tiling)
 
   @parameterized.product(
+      swizzle=(32, 128),
+      dtype=(jnp.float32, jnp.float16),
+  )
+  def test_cp_async_tiled_sliced(self, swizzle, dtype):
+    bw = bitwidth(dtype_to_ir_type(dtype))
+    swizzle_elems = 8 * swizzle // bw
+    tiling = (8, swizzle_elems)
+
+    full_shape = (256, 128)
+    slice_shape = (64, 64)
+    if slice_shape[-1] % swizzle_elems:
+      self.skipTest("Minor slice dimension not divisible by swizzle_elems")
+
+    def kernel(ctx, src, dst, scratch):
+      tmp, barrier = scratch
+      ctx.async_copy(
+          src_ref=src,
+          dst_ref=tmp,
+          gmem_slice=tuple(map(slice, slice_shape)),
+          swizzle=swizzle,
+          gmem_transform=mgpu.TileTransform(tiling),
+          implementation=mgpu.AsyncCopyImplementation.CP_ASYNC,
+          barrier=barrier,
+      )
+      barrier.wait()
+      mgpu.copy_tiled(tmp, dst, swizzle=swizzle)
+
+    x = np.arange(np.prod(full_shape), dtype=dtype).reshape(full_shape)
+    smem_shape = mgpu.tile_shape(slice_shape, tiling)
+    smem = jax.ShapeDtypeStruct(smem_shape, dtype)
+    out = jax.ShapeDtypeStruct(slice_shape, dtype)
+    y = mgpu.as_gpu_kernel(
+        kernel,
+        (1, 1, 1),
+        (128, 1, 1),
+        x,
+        out,
+        (smem, mgpu.Barrier(arrival_count=1)),
+    )(x)
+    np.testing.assert_array_equal(y, x[:slice_shape[0], :slice_shape[1]])
+
+  @parameterized.product(
       shape=((64, 128), (128, 40), (5, 256)),
       dtype=(jnp.float32, jnp.float16),
   )

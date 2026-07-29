@@ -1426,7 +1426,8 @@ class LaunchContext:
       else:
         assert swizzle is not None
         swizzle_elems = 8 * swizzle // element_bitwidth
-        if gmem_transform != (TileTransform((8, swizzle_elems)),):
+        tiling = (8, swizzle_elems)
+        if gmem_transform != (TileTransform(tiling),):
           raise NotImplementedError(gmem_transform)
         layout = fa.tiled_copy_smem_gmem_layout(
             *smem_ref_ty.shape[-4:-2], swizzle, element_bitwidth  # pyrefly: ignore[bad-argument-count]
@@ -1443,8 +1444,11 @@ class LaunchContext:
         dyn_offset = arith.addi(dyn_offset, gmem_offset)
         if gmem_ref_ty.rank != 2:
           raise NotImplementedError("Only 2D copies implemented")
+        untiled_smem_shape = fa.Tiling((tiling,)).untile_shape(
+            tuple(smem_ref_ty.shape)
+        )
         transfers = fa.FragmentedArray.transfer_tiled(
-            smem_ref, swizzle, layout, tuple(gmem_ref_ty.shape), optimized=False
+            smem_ref, swizzle, layout, untiled_smem_shape, optimized=False
         )
         gmem_base_ptr = utils.getelementptr(utils.memref_ptr(gmem_ref), [dyn_offset], gep_type)
         gmem_base_ptr = llvm.addrspacecast(
